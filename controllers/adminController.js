@@ -1,4 +1,4 @@
-const { User, School, Payment, Student, AcademicSession, SchoolSettings, SubscriptionPlan, SchoolPlan, SchoolSubscription, RevenueLedger, sequelize } = require('../models');
+const { User, School, Payment, Student, StudentParent, Staff, Section, Class, AcademicSession, SchoolSettings, SubscriptionPlan, SchoolPlan, SchoolSubscription, RevenueLedger, sequelize } = require('../models');
 const bcrypt = require('bcryptjs'); // For password hashing (though handled by model hook, good to have for clarity)
 
 /**
@@ -214,7 +214,21 @@ exports.updateSchoolSubscription = async (req, res) => {
  */
 exports.getAllSchools = async (req, res) => {
   try {
-    const schools = await School.findAll({
+    // Optional pagination + search (backward compatible: no params = all schools, capped at 200)
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+    const where = search
+      ? {
+          [require('sequelize').Op.or]: [
+            { name: { [require('sequelize').Op.iLike]: `%${search}%` } },
+          ],
+        }
+      : undefined;
+
+    const { rows: schools, count: total } = await School.findAndCountAll({
+      where,
       include: [
         {
           model: User,
@@ -243,7 +257,9 @@ exports.getAllSchools = async (req, res) => {
           attributes: ['id', 'start_date', 'expiry_date', 'status', 'plan_id']
         }
       ],
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
     });
 
     // Transform the response to match expected format
@@ -268,14 +284,14 @@ exports.getAllSchools = async (req, res) => {
     res.status(200).json({
       message: 'Schools retrieved successfully',
       count: transformedSchools.length,
+      total,
+      page,
+      limit,
       schools: transformedSchools
     });
   } catch (error) {
-    console.error("DEBUG FETCH SCHOOLS ERROR:", error);
-    return res.status(500).json({ 
-      message: "Failed to fetch schools.", 
-      error: error.message,
-      stack: error.stack 
+    return res.status(500).json({
+      message: 'Failed to fetch schools.'
     });
   }
 };
@@ -326,19 +342,16 @@ exports.getSchoolById = async (req, res) => {
  * Update school details (Super Admin only)
  */
 exports.updateSchool = async (req, res) => {
-  console.log('Updating School ID:', req.params.id);
-  console.log('Incoming Form Data:', req.body);
-
   const { id } = req.params;
-  const { 
-    name, 
-    phone, 
-    address, 
-    city, 
-    state, 
-    country, 
-    current_session, 
-    current_term, 
+  const {
+    name,
+    phone,
+    address,
+    city,
+    state,
+    country,
+    current_session,
+    current_term,
     is_blocked,
     proprietor_email,
     email
@@ -350,18 +363,25 @@ exports.updateSchool = async (req, res) => {
   try {
     transaction = await sequelize.transaction();
 
+    // Partial update only: never overwrite provided fields with null,
+    // and never change is_blocked unless explicitly sent.
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = phone;
+    if (address !== undefined) updates.address = address;
+    if (city !== undefined) updates.city = city;
+    if (state !== undefined) updates.state = state;
+    if (country !== undefined) updates.country = country;
+    if (current_session !== undefined) updates.current_session = current_session;
+    if (current_term !== undefined) updates.current_term = current_term;
+    if (is_blocked !== undefined) updates.is_blocked = !!is_blocked;
+
+    if (Object.keys(updates).length === 0 && !targetEmail) {
+      return res.status(400).json({ success: false, message: 'No fields to update.' });
+    }
+
     // Use Sequelize School.update to handle PostgreSQL Boolean and UUID values correctly
-    const [affectedRows] = await School.update({
-      name: name || null,
-      phone: phone || null,
-      address: address || null,
-      city: city || null,
-      state: state || null,
-      country: country || null,
-      current_session: current_session || null,
-      current_term: current_term || null,
-      is_blocked: is_blocked !== undefined ? !!is_blocked : false
-    }, {
+    const [affectedRows] = await School.update(updates, {
       where: { id },
       transaction
     });
@@ -413,11 +433,8 @@ exports.updateSchool = async (req, res) => {
     });
   } catch (error) {
     if (transaction) await transaction.rollback();
-    console.error("DEBUG UPDATE SCHOOL ERROR:", error);
-    return res.status(500).json({ 
-      message: "Failed to update school.", 
-      error: error.message,
-      stack: error.stack 
+    return res.status(500).json({
+      message: 'Failed to update school.'
     });
   }
 };
@@ -440,43 +457,47 @@ exports.deleteSchool = async (req, res) => {
     // Start transaction for atomic deletion
     transaction = await sequelize.transaction();
 
-    console.log(`🗑️ DELETING SCHOOL: ${school.name} (${id})`);
-
     // 1. Delete associated users
     await User.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted associated users');
 
     // 2. Delete associated school settings
     await SchoolSettings.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted school settings');
 
     // 3. Delete associated academic sessions
     await AcademicSession.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted academic sessions');
 
     // 4. Delete associated payments (must be before students if there are constraints)
     await Payment.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted payments');
 
     // 5. Delete associated students
     await Student.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted students');
 
     // 6. Delete associated revenue ledger records
     await RevenueLedger.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted revenue ledger records');
 
     // 7. Delete associated subscriptions
     await SchoolSubscription.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted school subscriptions');
 
     // 8. Delete associated school plans
     await SchoolPlan.destroy({ where: { school_id: id }, transaction });
-    console.log(' - Deleted school plans');
 
-    // 9. Finally, delete the school itself
+    // 9. Delete classes via their sections (scoped to this school only),
+    // then staff, then sections. Order matters for FK constraints.
+    const schoolSections = await Section.findAll({
+      where: { school_id: id },
+      attributes: ['id'],
+      transaction,
+    }).catch(() => []);
+    const sectionIds = (schoolSections || []).map((s) => s.id).filter(Boolean);
+    if (sectionIds.length > 0) {
+      await Class.destroy({ where: { section_id: sectionIds }, transaction }).catch(() => null);
+    }
+    await Staff.destroy({ where: { school_id: id }, transaction }).catch(() => null);
+    // Sections belong to the school — remove last to satisfy class FKs first
+    await Section.destroy({ where: { school_id: id }, transaction }).catch(() => null);
+
+    // 10. Finally, delete the school itself
     await school.destroy({ transaction });
-    console.log(' - Deleted school record');
 
     await transaction.commit();
 
@@ -485,11 +506,8 @@ exports.deleteSchool = async (req, res) => {
     });
   } catch (error) {
     if (transaction) await transaction.rollback();
-    console.error("DEBUG DELETE SCHOOL ERROR:", error);
-    return res.status(500).json({ 
-      message: "Failed to delete school due to database constraints or other error.",
-      error: error.message, 
-      stack: error.stack 
+    return res.status(500).json({
+      message: 'Failed to delete school due to database constraints or other error.'
     });
   }
 };

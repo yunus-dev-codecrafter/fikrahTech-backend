@@ -3,106 +3,101 @@ const { User } = require('../models');
 
 /**
  * JWT Token Verification Middleware
- * Verifies JWT tokens and attaches user to request
+ * Verifies JWT tokens and attaches a normalized user to the request.
+ * Normalized shape exposes BOTH `schoolId` and `school_id` so every
+ * controller keeps working regardless of which key it reads.
  */
 const verifyToken = async (req, res, next) => {
   try {
     // Get token from Authorization header
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader) {
       return res.status(401).json({
         message: 'Access token required',
-        debug: 'NO_TOKEN'
       });
     }
 
     // Extract token from "Bearer <token>"
     const token = authHeader.split(' ')[1];
 
-    if (!token) {
+    if (!token || token === 'null' || token === 'undefined') {
       return res.status(401).json({
         message: 'Invalid token format',
-        debug: 'INVALID_TOKEN_FORMAT'
+      });
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      return res.status(500).json({
+        message: 'Server configuration error.',
       });
     }
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
-    
-    if (!decoded) {
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
       return res.status(401).json({
         message: 'Invalid or expired token',
-        debug: 'INVALID_TOKEN'
       });
     }
 
-    // Find user from decoded token
-    const user = await User.findByPk(decoded.id);
-    
+    if (!decoded || !decoded.id) {
+      return res.status(401).json({
+        message: 'Invalid or expired token',
+      });
+    }
+
+    // Find user from decoded token (single DB lookup per request)
+    const user = await User.findByPk(decoded.id, {
+      attributes: ['id', 'email', 'role', 'school_id'],
+    });
+
     if (!user) {
       return res.status(401).json({
         message: 'User not found',
-        debug: 'USER_NOT_FOUND'
       });
     }
 
-    // Attach user to request with role
+    // Attach normalized user to request (both key styles supported)
     req.user = {
       id: user.id,
       email: user.email,
       role: user.role,
-      schoolId: user.school_id
+      schoolId: user.school_id,
+      school_id: user.school_id,
     };
-
-    console.log('🔍 TOKEN VERIFIED:', {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      schoolId: user.school_id
-    });
 
     next();
   } catch (error) {
-    console.error('❌ TOKEN VERIFICATION ERROR:', error);
-    return res.status(500).json({
+    return res.status(401).json({
       message: 'Token verification failed',
-      debug: 'VERIFICATION_ERROR',
-      error: error.message
     });
   }
 };
 
 /**
  * Admin Role Verification Middleware
- * Ensures only Super Admins can access admin routes
+ * Assumes verifyToken already ran (see routes/index.js) — does NOT
+ * re-verify the token, avoiding 2-3x DB hits per admin request.
  */
 const isAdmin = async (req, res, next) => {
-  // First verify token
-  verifyToken(req, res, () => {
-    // Check if user has Super Admin role (case-insensitive)
-    if (req.user && req.user.role.toLowerCase() !== 'super_admin') {
-      console.log('❌ ADMIN ACCESS DENIED:', {
-        userId: req.user.id,
-        role: req.user.role,
-        requiredRole: 'super_admin'
-      });
-      
-      return res.status(403).json({
-        message: 'Access denied. Super Admin privileges required.',
-        debug: 'INSUFFICIENT_ROLE',
-        requiredRole: 'super_admin',
-        currentRole: req.user.role
-      });
-    }
-
-    console.log('✅ ADMIN ACCESS GRANTED:', {
-      userId: req.user.id,
-      role: req.user.role
+  if (!req.user) {
+    return res.status(401).json({
+      message: 'Authentication required.',
     });
+  }
 
-    next();
-  });
+  const role = String(req.user.role || '').toLowerCase();
+  if (role !== 'super_admin' && role !== 'admin') {
+    return res.status(403).json({
+      message: 'Access denied. Admin privileges required.',
+    });
+  }
+
+  next();
 };
 
 module.exports = { verifyToken, isAdmin };

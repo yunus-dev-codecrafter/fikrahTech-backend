@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
 const revenueController = require('../controllers/revenueController');
-const { verifyToken, isAdmin } = require('../middleware/verifyToken');
 
-// Apply authentication middleware to all admin routes
-router.use(verifyToken);
+// NOTE: authentication + admin role are already enforced in routes/index.js
+// (router.use('/admin', verifyToken, isAdmin)). Do NOT re-apply verifyToken
+// here — that caused 2-3x DB lookups per admin request.
 
 // Route for Super Admin to register a new school and its first proprietor
 router.post('/schools/register', adminController.registerSchool);

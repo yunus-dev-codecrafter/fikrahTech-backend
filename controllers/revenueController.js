@@ -48,10 +48,8 @@ exports.recordPayment = async (req, res) => {
       ledger: ledgerItem
     });
   } catch (error) {
-    console.error('Error recording payment:', error);
     res.status(500).json({
-      message: 'Failed to record payment',
-      error: error.message
+      message: 'Failed to record payment'
     });
   }
 };
@@ -92,7 +90,11 @@ exports.getRevenueSummary = async (req, res) => {
  */
 exports.getRevenueList = async (req, res) => {
   try {
-    const ledger = await RevenueLedger.findAll({
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+    const offset = (page - 1) * limit;
+
+    const { rows: ledger, count: total } = await RevenueLedger.findAndCountAll({
       include: [
         {
           model: School,
@@ -100,18 +102,22 @@ exports.getRevenueList = async (req, res) => {
           attributes: ['name']
         }
       ],
-      order: [['updated_at', 'DESC']]
+      order: [['updated_at', 'DESC']],
+      limit,
+      offset,
     });
 
     res.status(200).json({
       success: true,
+      count: ledger.length,
+      total,
+      page,
+      limit,
       ledger
     });
   } catch (error) {
-    console.error('Error fetching revenue ledger list:', error);
     res.status(500).json({
-      message: 'Failed to fetch revenue ledger list',
-      error: error.message
+      message: 'Failed to fetch revenue ledger list'
     });
   }
 };

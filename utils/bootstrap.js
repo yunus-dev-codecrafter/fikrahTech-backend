@@ -1,23 +1,18 @@
 const { User, School, SubscriptionPlan } = require('../models');
-const bcrypt = require('bcryptjs');
 
 /**
- * Bootstrap System - Initializes database with default School and Super Admin
- * Ensures atomic operations and proper relational integrity
+ * Bootstrap System - Initializes database with default School and Super Admin.
+ * SAFE: never resets an existing admin password on boot. Credentials are only
+ * applied on first creation; afterwards the DB is the source of truth.
+ * Set BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD env vars to override defaults.
  */
 async function bootstrapSystem() {
     try {
-        console.log('🚀 Starting FikrahTech System Bootstrap...');
-        
-        // Default admin credentials (CHANGE IN PRODUCTION)
-        const adminCredentials = {
-            name: 'Yunus Abdulhamid',
-            email: 'yunusabdulhameed1@gmail.com',
-            plainPassword: 'Admin@123' // TODO: Change in production
-        };
+        const adminEmail = process.env.BOOTSTRAP_ADMIN_EMAIL || 'yunusabdulhameed1@gmail.com';
+        const adminName = process.env.BOOTSTRAP_ADMIN_NAME || 'Yunus Abdulhamid';
 
         // 1. Ensure Main Academy School exists (atomic operation)
-        const [school, schoolCreated] = await School.findOrCreate({
+        const [school] = await School.findOrCreate({
             where: { name: 'FikrahTech Main Academy' },
             defaults: {
                 name: 'FikrahTech Main Academy',
@@ -26,43 +21,20 @@ async function bootstrapSystem() {
                 current_term: 'First Term'
             }
         });
-        console.log('✅ SCHOOL CHECK COMPLETE');
 
-        // 2. Create or Update Super Admin (atomic operation) - Use plain text, let model hooks hash it
-        const [user, userCreated] = await User.findOrCreate({
-            where: { email: adminCredentials.email },
-            defaults: {
-                email: adminCredentials.email,
-                password: adminCredentials.plainPassword, // Let User model hooks handle hashing
+        // 2. Create Super Admin ONLY if missing — never overwrite an existing password.
+        const existing = await User.findOne({ where: { email: adminEmail } });
+        let user = existing;
+        if (!user) {
+            const initialPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || 'Admin@123';
+            user = await User.create({
+                email: adminEmail,
+                password: initialPassword, // User model hooks hash this
                 role: 'super_admin',
                 school_id: null,
-                name: adminCredentials.name
-            }
-        });
-
-        if (userCreated) {
-            console.log('✅ NEW Super Admin created successfully');
-            console.log(`📧 Email: ${adminCredentials.email}`);
-            console.log(`👤 Name: ${adminCredentials.name}`);
-            console.log(`🏫 School ID: null`);
-        } else {
-            // Update existing user's password and role - Use plain text, let model hooks hash it
-            await user.update({
-                password: adminCredentials.plainPassword, // Let User model hooks handle hashing
-                role: 'super_admin',
-                school_id: null,
-                name: adminCredentials.name
+                name: adminName
             });
-            console.log('✅ Existing Super Admin updated successfully');
-            console.log(`📧 Email: ${adminCredentials.email}`);
-            console.log(`👤 Name: ${adminCredentials.name}`);
         }
-
-        // 3. Security Reminder
-        console.log('⚠️ SECURITY REMINDER: Change default password in production!');
-        console.log('🎯 Default Login Credentials:');
-        console.log(`   Email: ${adminCredentials.email}`);
-        console.log(`   Password: ${adminCredentials.plainPassword}`);
 
         // 3. Seed default subscription plans if table is empty
         const planCount = await SubscriptionPlan.count();
@@ -72,23 +44,11 @@ async function bootstrapSystem() {
                 { name: 'Pro', price: 12000.00, billing_cycle: 'termly', discount_amount: 500.00, features: JSON.stringify(['Up to 500 students', 'Advanced reports', 'SMS notifications']), is_active: true },
                 { name: 'Enterprise', price: 25000.00, billing_cycle: 'session', discount_amount: 2000.00, features: JSON.stringify(['Unlimited students', 'Full feature access', 'Priority support']), is_active: true }
             ]);
-            console.log('✅ Default subscription plans seeded.');
         }
 
-        console.log('🎉 FikrahTech System Bootstrap Complete!');
-        return {
-            success: true,
-            school,
-            user,
-            credentials: {
-                email: adminCredentials.email,
-                password: adminCredentials.plainPassword
-            }
-        };
-
+        return { success: true, school, user };
     } catch (error) {
-        console.error('❌ Bootstrap System Failed:', error);
-        throw new Error(`System bootstrap failed: ${error.message}`);
+        throw new Error('System bootstrap failed.');
     }
 }
 

@@ -1,51 +1,45 @@
 const jwt = require('jsonwebtoken');
 
-// Simple JWT verification middleware
+// Simple JWT verification middleware (proprietor routes).
+// Attaches a normalized user with both `school_id` and `schoolId`.
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  console.log('Incoming Header:', authHeader);
-  
+  const authHeader = req.headers.authorization;
+
   if (!authHeader) {
-    console.error('MISSING TOKEN HEADER');
-    return res.status(401).json({ 
-      message: 'Missing Token Header' 
+    return res.status(401).json({
+      message: 'Missing Token Header'
     });
   }
 
   const token = authHeader.split(' ')[1]; // Bearer TOKEN
 
-  if (!token) {
-    console.error('MISSING TOKEN IN HEADER');
-    return res.status(401).json({ 
-      message: 'Missing Token Header' 
-    });
-  }
-
-  // Check for null/undefined tokens (as strings)
-  if (token === 'null' || token === 'undefined' || token === 'null' || token === 'undefined') {
-    console.error('INVALID TOKEN FORMAT - null/undefined string');
-    return res.status(401).json({ 
-      message: 'Invalid token format' 
+  if (!token || token === 'null' || token === 'undefined') {
+    return res.status(401).json({
+      message: 'Invalid token format'
     });
   }
 
   const jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret) {
-    console.error('MISSING JWT_SECRET');
-    return res.status(500).json({ 
-      message: 'Server configuration error - JWT_SECRET missing' 
+    return res.status(500).json({
+      message: 'Server configuration error - JWT_SECRET missing'
     });
   }
 
   jwt.verify(token, jwtSecret, (err, decoded) => {
     if (err) {
-      console.error('JWT VERIFICATION FAILED:', err);
-      return res.status(401).json({ 
-        message: 'Invalid or expired token' 
+      return res.status(401).json({
+        message: 'Invalid or expired token'
       });
     }
 
-    req.user = decoded;
+    // Normalize: proprietorController reads req.user.school_id,
+    // other code may read schoolId — expose both.
+    req.user = {
+      ...decoded,
+      schoolId: decoded.school_id ?? decoded.schoolId ?? null,
+      school_id: decoded.school_id ?? decoded.schoolId ?? null,
+    };
     next();
   });
 };

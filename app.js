@@ -4,30 +4,50 @@ const cors = require('cors');
 const app = express();
 const allRoutes = require('./routes'); // Import the consolidated routes
 
-console.log('CORS initialized for Vercel origin');
+const allowedOrigins = [
+  'https://fikrahtech.vercel.app',
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean);
 
 app.use(cors({
-  origin: [
-    'https://fikrahtech.vercel.app', // Your actual Vercel domain
-    'http://localhost:5173' // Common Vite dev port
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-section-id'],
-  credentials: true // Allow cookies if needed for authentication
+  credentials: true,
 }));
 
-app.use(express.json()); // For parsing application/json request bodies
+app.use(express.json({ limit: '1mb' }));
 
-// Handle OPTIONS preflight requests
-app.options('*', cors());
+// Minimal security headers (no new dependencies)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
 
 // Mount all routes under /api
 app.use('/api', allRoutes);
 
-// Basic error handling middleware (can be expanded)
+// 404 for unknown API routes (JSON, not HTML)
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'API route not found.' });
+});
+
+// Central error handler — never leak stacks to clients in production
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send('Something broke!');
+  const status = err.status || err.statusCode || 500;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) {
+    // eslint-disable-next-line no-console
+    console.error(err);
+  }
+  res.status(status).json({
+    message: status === 500 ? 'Internal server error.' : (err.message || 'Request failed.'),
+  });
 });
 
 module.exports = app;

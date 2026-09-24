@@ -45,11 +45,15 @@ exports.registerStudent = async (req, res) => {
     parent_phone
   } = req.body;
 
-  const school_id = req.user.school_id;
+  const school_id = req.user.school_id ?? req.user.schoolId;
   const active_section_id = section_id || getSectionId(req);
 
   if (!first_name || !last_name || !parent_email) {
     return res.status(400).json({ message: 'First name, last name, and parent email are required.' });
+  }
+
+  if (!school_id) {
+    return res.status(400).json({ message: 'School context is missing for this account.' });
   }
 
   let transaction;
@@ -58,10 +62,12 @@ exports.registerStudent = async (req, res) => {
 
     // 1. Check if parent exists
     let parent = await User.findOne({ where: { email: parent_email }, transaction });
+    let parentIsNew = false;
 
     if (!parent) {
       // Create new parent user
       const tempPassword = generateTempPassword();
+      parentIsNew = true;
       parent = await User.create({
         email: parent_email,
         name: parent_name || 'Parent',
@@ -71,8 +77,6 @@ exports.registerStudent = async (req, res) => {
         status: 'active',
         needs_password_reset: true
       }, { transaction });
-      
-      console.log(`🔍 PARENT CREATED: ${parent_email} with temp password: ${tempPassword}`);
     }
 
     // 2. Create student
@@ -105,16 +109,14 @@ exports.registerStudent = async (req, res) => {
       parent: {
         id: parent.id,
         email: parent.email,
-        is_new: !parent.id // This is a bit simplified, but works for the response
+        is_new: parentIsNew
       }
     });
   } catch (error) {
     if (transaction) await transaction.rollback();
-    console.error('Error registering student:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Failed to register student and parent.', 
-      error: error.message 
+      message: 'Failed to register student and parent.'
     });
   }
 };
@@ -134,7 +136,7 @@ exports.createStaff = async (req, res) => {
     role_permissions 
   } = req.body;
 
-  const school_id = req.user.school_id;
+  const school_id = req.user.school_id ?? req.user.schoolId;
 
   if (!email || !name || !role) {
     return res.status(400).json({ message: 'Email, name, and role are required.' });
@@ -179,8 +181,6 @@ exports.createStaff = async (req, res) => {
 
     await transaction.commit();
 
-    console.log(`🔍 STAFF CREATED: ${email} with temp password: ${tempPassword}`);
-
     res.status(201).json({
       success: true,
       message: 'Staff account created successfully',
@@ -206,9 +206,12 @@ exports.createStaff = async (req, res) => {
  */
 exports.getAllStaff = async (req, res) => {
   try {
-    const school_id = req.user.school_id;
+    const school_id = req.user.school_id ?? req.user.schoolId;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+    const offset = (page - 1) * limit;
 
-    const staff = await User.findAll({
+    const { rows: staff, count: total } = await User.findAndCountAll({
       where: { 
         school_id,
         role: 'staff'
@@ -227,20 +230,23 @@ exports.getAllStaff = async (req, res) => {
         }
       ],
       attributes: { exclude: ['password'] },
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
     });
 
     res.status(200).json({
       success: true,
       count: staff.length,
+      total,
+      page,
+      limit,
       staff
     });
   } catch (error) {
-    console.error('Error fetching staff list:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Failed to retrieve staff directory.',
-      error: error.message 
+      message: 'Failed to retrieve staff directory.'
     });
   }
 };
@@ -349,7 +355,10 @@ exports.getClasses = async (req, res) => {
 exports.getAllStudents = async (req, res) => {
   try {
     const section_id = getSectionId(req);
-    const school_id = req.user.school_id;
+    const school_id = req.user.school_id ?? req.user.schoolId;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+    const offset = (page - 1) * limit;
 
     const whereClause = { school_id };
     let targetSectionId = section_id;
@@ -375,7 +384,7 @@ exports.getAllStudents = async (req, res) => {
       whereClause.section_id = targetSectionId;
     }
 
-    const students = await Student.findAll({
+    const { rows: students, count: total } = await Student.findAndCountAll({
       where: whereClause,
       include: [
         {
@@ -389,20 +398,23 @@ exports.getAllStudents = async (req, res) => {
           attributes: ['id', 'name']
         }
       ],
-      order: [['first_name', 'ASC'], ['last_name', 'ASC']]
+      order: [['first_name', 'ASC'], ['last_name', 'ASC']],
+      limit,
+      offset,
     });
 
     res.status(200).json({
       success: true,
       count: students.length,
+      total,
+      page,
+      limit,
       students
     });
   } catch (error) {
-    console.error('Error fetching students list:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Failed to retrieve student directory.',
-      error: error.message 
+      message: 'Failed to retrieve student directory.'
     });
   }
 };
@@ -412,7 +424,7 @@ exports.getAllStudents = async (req, res) => {
  */
 exports.getDashboardStats = async (req, res) => {
   try {
-    const school_id = req.user.school_id;
+    const school_id = req.user.school_id ?? req.user.schoolId;
     const section_id = getSectionId(req);
 
     const whereClause = { school_id };
@@ -421,18 +433,17 @@ exports.getDashboardStats = async (req, res) => {
     }
 
     const studentCount = await Student.count({ where: whereClause });
-    
-    // Additional stats can be added here
-    
+    const staffCount = await User.count({ where: { school_id, role: 'staff' } }).catch(() => null);
+
     res.status(200).json({
       message: 'Dashboard stats retrieved',
       stats: {
         total_students: studentCount,
+        ...(staffCount !== null ? { total_staff: staffCount } : {}),
         active_section: section_id || 'All'
       }
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ message: 'Failed to retrieve stats.' });
   }
 };
@@ -484,7 +495,7 @@ exports.getFinanceReport = async (req, res) => {
 exports.getSections = async (req, res) => {
   try {
     const sections = await Section.findAll({
-      where: { school_id: req.user.school_id }
+      where: { school_id: req.user.school_id ?? req.user.schoolId }
     });
     res.status(200).json({ sections });
   } catch (error) {
@@ -498,9 +509,12 @@ exports.getSections = async (req, res) => {
 exports.createSection = async (req, res) => {
   try {
     const { name } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ message: 'Section name is required.' });
+    }
     const section = await Section.create({
-      name,
-      school_id: req.user.school_id
+      name: String(name).trim(),
+      school_id: req.user.school_id ?? req.user.schoolId
     });
     res.status(201).json({ section });
   } catch (error) {
