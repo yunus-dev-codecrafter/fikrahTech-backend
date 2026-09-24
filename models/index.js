@@ -8,31 +8,33 @@ const config = require(__dirname + '/../config/config.js')[env];
 const db = {};
 
 let sequelize;
-const useDirectEnv = process.env.DB_NAME || process.env.DB_USER || process.env.DB_PASSWORD || process.env.DB_HOST;
+const databaseUrl = process.env.DATABASE_URL ? String(process.env.DATABASE_URL).trim().replace(/^["']|["']$/g, '') : null;
 
-if (useDirectEnv) {
-  sequelize = new Sequelize(
-    process.env.DB_NAME || 'postgres',
-    process.env.DB_USER,
-    process.env.DB_PASSWORD,
-    {
-      host: process.env.DB_HOST,
-      port: process.env.DB_PORT || 5432,
-      dialect: 'postgres',
-      logging: false,
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: false
-        }
-      },
-      define: config.define
-    }
-  );
-} else if (config.use_env_variable && process.env[config.use_env_variable]) {
-  sequelize = new Sequelize(process.env[config.use_env_variable], config);
+function isLocalHost(host) {
+  if (!host) return true;
+  const h = String(host).toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+const useSSL = databaseUrl ? !isLocalHost(config.host) : !isLocalHost(config.host);
+const baseOptions = {
+  dialect: 'postgres',
+  logging: env === 'development' ? console.log : false,
+  define: config.define,
+  pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
+  dialectOptions: useSSL ? { ssl: { require: true, rejectUnauthorized: false } } : {},
+};
+
+if (databaseUrl) {
+  // Primary path: single connection string (Render / Supabase / Neon).
+  // Pass options separately — never merge parsed user/pass fields into the URL string.
+  sequelize = new Sequelize(databaseUrl, baseOptions);
 } else {
-  sequelize = new Sequelize(config.database, config.username, config.password, config);
+  sequelize = new Sequelize(config.database, config.username, config.password, {
+    ...baseOptions,
+    host: config.host,
+    port: config.port || 5432,
+  });
 }
 
 fs

@@ -20,6 +20,16 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// Health endpoints for Render port scan / health checks. Must stay DB-free
+// so the service reports healthy even while Postgres is reconnecting.
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'ok', service: 'fikrahtech-backend' });
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
 // Minimal security headers (no new dependencies)
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');

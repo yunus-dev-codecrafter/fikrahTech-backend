@@ -1,42 +1,49 @@
 require('dotenv').config(); // Load environment variables
 
-// Parse DATABASE_URL if available (Railway provides this)
+// Parse DATABASE_URL if available (Render / Railway / Supabase / Neon provide this).
+// Supports both postgres:// and postgresql:// schemes.
+// Never logs passwords or the full URL.
 function parseDatabaseUrl(url) {
   if (!url) return null;
-  
+
+  const trimmed = String(url).trim().replace(/^["']|["']$/g, '');
+  // Normalize scheme so `new URL` always works; pg accepts both.
+  const normalized = trimmed.replace(/^postgresql:\/\//i, 'postgres://');
+
   try {
-    const urlObj = new URL(url);
-    console.log('🔍 DEBUG: Parsing DATABASE_URL:', url);
+    const urlObj = new URL(normalized);
+    const database = decodeURIComponent(urlObj.pathname.replace(/^\//, '').split('?')[0]);
     const config = {
       host: urlObj.hostname,
       port: urlObj.port || 5432,
-      database: urlObj.pathname.substring(1), // Remove leading slash
-      username: urlObj.username,
-      password: urlObj.password,
-      ssl: { require: true, rejectUnauthorized: false }
+      database,
+      username: decodeURIComponent(urlObj.username),
+      // Keep encoded chars (%40, %23, ...) intact by decoding once.
+      password: decodeURIComponent(urlObj.password),
     };
-    console.log('✅ DEBUG: Parsed config:', {
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      username: config.username,
-      hasPassword: !!config.password
-    });
     return config;
   } catch (error) {
-    console.error('❌ Invalid DATABASE_URL format:', error);
+    console.error('❌ Invalid DATABASE_URL format. Make sure special chars in the password are URL-encoded.');
     return null;
   }
 }
 
-// Check for DATABASE_URL first (Railway), then fall back to individual vars
-const dbConfig = parseDatabaseUrl(process.env.DATABASE_URL) || {
+// SSL is required for hosted Postgres (Render / Supabase / Neon / Railway).
+// Localhost does not need it.
+function needsSSL(host) {
+  if (!host) return false;
+  const h = String(host).toLowerCase();
+  return !(h === 'localhost' || h === '127.0.0.1' || h === '::1');
+}
+
+// Check for DATABASE_URL first (hosted), then fall back to individual vars
+const parsed = parseDatabaseUrl(process.env.DATABASE_URL);
+const dbConfig = parsed || {
   username: process.env.DB_USERNAME,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_DATABASE,
   host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  ssl: { require: true, rejectUnauthorized: false }
+  port: process.env.DB_PORT || 5432,
 };
 
 // Validate required database configuration
@@ -52,17 +59,25 @@ if (!dbConfig.host || !dbConfig.username || !dbConfig.password || !dbConfig.data
 
 console.log('✅ Database Configuration:');
 console.log('Host:', dbConfig.host);
+console.log('Port:', dbConfig.port);
 console.log('Database:', dbConfig.database);
 console.log('Username:', dbConfig.username);
+console.log('Source:', parsed ? 'DATABASE_URL' : 'individual DB_* vars');
+if (parsed && String(dbConfig.port) === '6543') {
+  console.log('ℹ️  Port 6543 detected (Supabase pooler). If you see "tenant/user not found", re-copy the pooled URL from Supabase Dashboard > Connect > Transaction mode and URL-encode the password.');
+}
+
+const useSSL = needsSSL(dbConfig.host);
+const dialectOptions = useSSL
+  ? { ssl: { require: true, rejectUnauthorized: false } }
+  : {};
 
 module.exports = {
   development: {
     ...dbConfig,
     dialect: 'postgres',
     logging: process.env.NODE_ENV === 'development',
-    dialectOptions: {
-      ssl: dbConfig.ssl
-    },
+    dialectOptions,
     define: {
       timestamps: true,
       underscored: true
@@ -72,14 +87,10 @@ module.exports = {
     ...dbConfig,
     dialect: 'postgres',
     logging: false,
-    dialectOptions: {
-      ssl: dbConfig.ssl
-    },
+    dialectOptions,
     define: {
       timestamps: true,
       underscored: true
     }
   },
-  // Use DATABASE_URL as the primary connection method
-  use_env_variable: 'DATABASE_URL'
 };

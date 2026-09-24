@@ -48,6 +48,7 @@ async function bootstrapSystem() {
 
         return { success: true, school, user };
     } catch (error) {
+        console.error('System bootstrap failed:', error.message);
         throw new Error('System bootstrap failed.');
     }
 }
